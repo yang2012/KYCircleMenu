@@ -7,22 +7,33 @@
 //
 
 #import "KYCircleMenu.h"
+#import <ReactiveCocoa/ReactiveCocoa.h>
+#import <RACEXTScope.h>
 
-@interface KYCircleMenu () {
- @private
-  NSInteger buttonCount_;
-  CGRect    buttonOriginFrame_;
-  
-  NSString * buttonImageNameFormat_;
-  NSString * centerButtonImageName_;
-  NSString * centerButtonBackgroundImageName_;
-  
-  BOOL shouldRecoverToNormalStatusWhenViewWillAppear_;
-}
+@interface KYCircleMenu ()
 
-@property (nonatomic, copy) NSString * buttonImageNameFormat,
-                                     * centerButtonImageName,
-                                     * centerButtonBackgroundImageName;
+@property (nonatomic, assign) CGFloat centerButtonSize;
+@property (nonatomic, assign) CGFloat buttonSize;
+
+@property (nonatomic, assign) CGPoint centerButtonCenterPosition;
+@property (nonatomic, assign) CGRect buttonOriginFrame;
+@property (nonatomic, assign) BOOL shouldRecoverToNormalStatusWhenViewWillAppear;
+
+@property (nonatomic, strong) NSString *centerButtonImageName;
+@property (nonatomic, strong) NSString *centerButtonHighlightedImageName;
+
+@property (nonatomic, strong) NSMutableArray *buttons;
+@property (nonatomic, strong) UIImageView *centerButton;
+@property (nonatomic, weak) UIButton *activeButton;
+
+@property (nonatomic, strong) RACSubject *menuOpenSignal;
+@property (nonatomic, strong) RACSubject *menuNeedToClosedSignal;
+
+// Basic configuration for the Circle Menu
+@property (nonatomic, assign) CGFloat defaultTriangleHypotenuse;
+@property (nonatomic, assign) CGFloat minBounceOfTriangleHypotenuse;
+@property (nonatomic, assign) CGFloat maxBounceOfTriangleHypotenuse;
+@property (nonatomic, assign) CGFloat maxTriangleHypotenuse;
 
 - (void)_releaseSubviews;
 - (void)_setupNotificationObserver;
@@ -34,270 +45,230 @@
 // Update buttons' layout with the value of triangle hypotenuse that given
 - (void)_updateButtonsLayoutWithTriangleHypotenuse:(CGFloat)triangleHypotenuse;
 // Update button's origin value
-- (void)_setButtonWithTag:(NSInteger)buttonTag origin:(CGPoint)origin;
+- (void)_setButtonAtPosition:(KYCircleMenuPosition)position origin:(CGPoint)origin;
 
 @end
 
 
-// Basic configuration for the Circle Menu
-static CGFloat menuSize_,         // size of menu
-               buttonSize_,       // size of buttons around
-               centerButtonSize_; // size of center button
-static CGFloat defaultTriangleHypotenuse_,
-               minBounceOfTriangleHypotenuse_,
-               maxBounceOfTriangleHypotenuse_,
-               maxTriangleHypotenuse_;
-
-
 @implementation KYCircleMenu
 
-@synthesize menu           = menu_,
-            centerButton   = centerButton_;
-@synthesize isOpening      = isOpening_,
-            isInProcessing = isInProcessing_,
-            isClosed       = isClosed_;
-@synthesize buttonImageNameFormat = buttonImageNameFormat_,
-            centerButtonImageName = centerButtonImageName_,
-  centerButtonBackgroundImageName = centerButtonBackgroundImageName_;
-
 -(void)dealloc {
-  self.buttonImageNameFormat =
-    self.centerButtonImageName =
-    self.centerButtonBackgroundImageName = nil;
-  // Release subvies & remove notification observer
-  [self _releaseSubviews];
-  [[NSNotificationCenter defaultCenter] removeObserver:self name:kKYNCircleMenuClose object:nil];
-  [super dealloc];
+    self.centerButtonImageName = nil;
+    self.centerButtonHighlightedImageName = nil;
+    // Release subvies & remove notification observer
+    [self _releaseSubviews];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kKYNCircleMenuClose object:nil];
 }
 
 - (void)_releaseSubviews {
-  self.centerButton = nil;
-  self.menu         = nil;
+    [self.centerButton removeFromSuperview];
+    self.centerButton = nil;
 }
 
 // Designated initializer
-- (id)      initWithButtonCount:(NSInteger)buttonCount
-                       menuSize:(CGFloat)menuSize
-                     buttonSize:(CGFloat)buttonSize
-          buttonImageNameFormat:(NSString *)buttonImageNameFormat
-               centerButtonSize:(CGFloat)centerButtonSize
-          centerButtonImageName:(NSString *)centerButtonImageName
-centerButtonBackgroundImageName:(NSString *)centerButtonBackgroundImageName {
-  if (self = [self init]) {
-    buttonCount_                     = buttonCount;
-    menuSize_                        = menuSize;
-    buttonSize_                      = buttonSize;
-    buttonImageNameFormat_           = buttonImageNameFormat;
-    centerButtonSize_                = centerButtonSize;
-    centerButtonImageName_           = centerButtonImageName;
-    centerButtonBackgroundImageName_ = centerButtonBackgroundImageName;
-    
-    // Defualt value for triangle hypotenuse
-    defaultTriangleHypotenuse_     = (menuSize - buttonSize) / 2.f;
-    minBounceOfTriangleHypotenuse_ = defaultTriangleHypotenuse_ - 12.f;
-    maxBounceOfTriangleHypotenuse_ = defaultTriangleHypotenuse_ + 12.f;
-    maxTriangleHypotenuse_         = kKYCircleMenuViewHeight / 2.f;
-    
-    // Buttons' origin frame
-    CGFloat originX = (menuSize_ - centerButtonSize_) / 2;
-    buttonOriginFrame_ =
-      (CGRect){{originX, originX}, {centerButtonSize_, centerButtonSize_}};
-  }
-  return self;
+
+- (id)          initWithMenuSize:(CGFloat)menuSize
+                      buttonSize:(CGFloat)buttonSize
+                centerButtonSize:(CGFloat)centerButtonSize
+      centerButtonCenterPosition:(CGPoint)centerPosition
+           centerButtonImageName:(NSString *)centerButtonImageName
+centerButtonHighlightedImageName:(NSString *)centerButtonHighlightedImageName {
+    if (self = [self init]) {
+        self.buttonSize                         = buttonSize;
+        self.centerButtonSize                   = centerButtonSize;
+        self.centerButtonCenterPosition         = centerPosition;
+        self.centerButtonImageName              = centerButtonImageName;
+        self.centerButtonHighlightedImageName   = centerButtonHighlightedImageName;
+        
+        CGFloat maxWidth = CGRectGetWidth([UIScreen mainScreen].applicationFrame);
+          
+        // Defualt value for triangle hypotenuse
+        self.defaultTriangleHypotenuse     = (menuSize - buttonSize) / 2.f;
+        self.minBounceOfTriangleHypotenuse = self.defaultTriangleHypotenuse - 12.f;
+        self.maxBounceOfTriangleHypotenuse = self.defaultTriangleHypotenuse + 12.f;
+        self.maxTriangleHypotenuse         = maxWidth / 2.f;
+
+        // Buttons' origin frame
+        CGFloat originX = self.centerButtonCenterPosition.x - (self.centerButtonSize / 2);
+        CGFloat originY = self.centerButtonCenterPosition.y - (self.centerButtonSize / 2);
+        self.buttonOriginFrame =
+          (CGRect){{originX, originY}, {self.centerButtonSize, self.centerButtonSize}};
+        
+        self.buttons = [NSMutableArray array];
+        
+        self.menuOpenSignal = [RACSubject subject];
+        self.menuNeedToClosedSignal = [RACSubject subject];
+    }
+    return self;
 }
 
 // Secondary initializer
 - (id)init {
   self = [super init];
   if (self) {
-    isInProcessing_ = NO;
-    isOpening_      = NO;
-    isClosed_       = YES;
-    shouldRecoverToNormalStatusWhenViewWillAppear_ = NO;
-#ifndef KY_CIRCLEMENU_WITH_NAVIGATIONBAR
-    [self.navigationController setNavigationBarHidden:YES];
-#endif
+    self.isInProcessing = NO;
+    self.isOpening      = NO;
+    self.isClosed       = YES;
+    self.shouldRecoverToNormalStatusWhenViewWillAppear = NO;
   }
   return self;
 }
 
-- (void)didReceiveMemoryWarning {
-  // Releases the view if it doesn't have a superview.
-  [super didReceiveMemoryWarning];
-  
-  // Release any cached data, images, etc that aren't in use.
-}
-
 #pragma mark - View lifecycle
 
-// Implement loadView to create a view hierarchy programmatically, without using a nib.
-- (void)loadView {
-  CGFloat viewHeight =
-    (self.navigationController.isNavigationBarHidden
-      ? kKYCircleMenuViewHeight : kKYCircleMenuViewHeight - kKYCircleMenuNavigationBarHeight);
-  CGRect frame = CGRectMake(0.f, 0.f, kKYCircleMenuViewWidth, viewHeight);
-  UIView * view = [[UIView alloc] initWithFrame:frame];
-  self.view = view;
-  [view release];
-}
-
 // Implement viewDidLoad to do additional setup after loading the view, typically from a nib.
-- (void)viewDidLoad {
-  [super viewDidLoad];
-  
-  // Constants
-  CGFloat viewHeight = CGRectGetHeight(self.view.frame);
-  CGFloat viewWidth  = CGRectGetWidth(self.view.frame);
-  
-  // Center Menu View
-  CGRect centerMenuFrame =
-    CGRectMake((viewWidth - menuSize_) / 2, (viewHeight - menuSize_) / 2, menuSize_, menuSize_);
-  menu_ = [[UIView alloc] initWithFrame:centerMenuFrame];
-  [menu_ setAlpha:0.f];
-  [self.view addSubview:menu_];
-  
-  // Add buttons to |ballMenu_|, set it's origin frame to center
-  NSString * imageName = nil;
-  for (int i = 1; i <= buttonCount_; ++i) {
-    UIButton * button = [[UIButton alloc] initWithFrame:buttonOriginFrame_];
-    [button setOpaque:NO];
-    [button setTag:i];
-    imageName = [NSString stringWithFormat:self.buttonImageNameFormat, button.tag];
-    [button setImage:[UIImage imageNamed:imageName]
-            forState:UIControlStateNormal];
-    [button addTarget:self action:@selector(runButtonActions:) forControlEvents:UIControlEventTouchUpInside];
-    [self.menu addSubview:button];
-    [button release];
-  }
-  
-  // Main Button
-  CGRect mainButtonFrame =
-    CGRectMake((CGRectGetWidth(self.view.frame) - centerButtonSize_) / 2.f,
-               (CGRectGetHeight(self.view.frame) - centerButtonSize_) / 2.f,
-               centerButtonSize_, centerButtonSize_);
-  centerButton_ = [[UIButton alloc] initWithFrame:mainButtonFrame];
-  [centerButton_ setBackgroundImage:[UIImage imageNamed:self.centerButtonBackgroundImageName]
-                           forState:UIControlStateNormal];
-  [centerButton_ setImage:[UIImage imageNamed:self.centerButtonImageName]
-                 forState:UIControlStateNormal];
-  [centerButton_ addTarget:self
-                    action:@selector(_toggle:)
-          forControlEvents:UIControlEventTouchUpInside];
-  [self.view addSubview:centerButton_];
-  
-  // Setup notification observer
-  [self _setupNotificationObserver];
-}
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+    
+    // Main Button
+    CGRect mainButtonFrame =
+    CGRectMake(self.centerButtonCenterPosition.x - (self.centerButtonSize / 2), self.centerButtonCenterPosition.y - (self.centerButtonSize / 2),
+               self.centerButtonSize, self.centerButtonSize);
+    self.centerButton = [[UIImageView alloc] initWithFrame:mainButtonFrame];
+    self.centerButton.userInteractionEnabled = YES;
+    [self.centerButton setImage:[UIImage imageNamed:self.centerButtonImageName]];
+    [self.centerButton setHighlightedImage:[UIImage imageNamed:self.centerButtonHighlightedImageName]];
+    [self addSubview:self.centerButton];
+    
+    // Listen to gesture
+    UITapGestureRecognizer *tapGestureRecognizer = [[UITapGestureRecognizer alloc] init];
+    tapGestureRecognizer.numberOfTapsRequired = 1;
+    tapGestureRecognizer.enabled = YES;
+    [self.centerButton addGestureRecognizer:tapGestureRecognizer];
+    
+    [tapGestureRecognizer.rac_gestureSignal subscribeNext:^(id x) {
+        if ([self.circleDelegate respondsToSelector:@selector(circleMenuDidTapCenterButton:)]) {
+            [self.circleDelegate circleMenuDidTapCenterButton:self];
+        }
+    }];
+    
+    RAC(self.centerButton, highlighted) = [[tapGestureRecognizer.rac_gestureSignal filter:^BOOL(UITapGestureRecognizer *tapGesture) {
+        return tapGesture.state == UIGestureRecognizerStateEnded;
+    }] map:^id(id value) {
+        return @YES;
+    }];
+    
+    UIPanGestureRecognizer *panGestureRecognizer = [[UIPanGestureRecognizer alloc] init];
+    panGestureRecognizer.enabled = YES;
+    panGestureRecognizer.cancelsTouchesInView = NO;
+    [self.centerButton addGestureRecognizer:panGestureRecognizer];
+    
+    [self rac_liftSelector:@selector(_handlePanGesture:) withSignals:panGestureRecognizer.rac_gestureSignal, nil];
+    
+    RACSignal *closeSignal = [RACSignal zip:@[self.menuNeedToClosedSignal, self.menuOpenSignal]];
+    [self rac_liftSelector:@selector(_close:) withSignals:closeSignal, nil];
 
-- (void)viewDidUnload {
-  [super viewDidUnload];
-  [self _releaseSubviews];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-  [super viewWillAppear:animated];
-  
-#ifndef KY_CIRCLEMENU_WITH_NAVIGATIONBAR
-  [self.navigationController setNavigationBarHidden:YES animated:YES];
-#endif
-  
-  // If it is from child view by press the buttons,
-  //   recover menu to normal state
-  if (shouldRecoverToNormalStatusWhenViewWillAppear_)
-    [self performSelector:@selector(recoverToNormalStatus)
-               withObject:nil
-               afterDelay:.3f];
-}
-
-- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
-  // Return YES for supported orientations
-  return (interfaceOrientation == UIInterfaceOrientationPortrait);
+    // Setup notification observer
+    [self _setupNotificationObserver];
 }
 
 #pragma mark - Publich Button Action
 
-// Run action depend on button, it'll be implemented by subclass
-- (void)runButtonActions:(id)sender {
-#ifndef KY_CIRCLEMENU_WITH_NAVIGATIONBAR
-  [self.navigationController setNavigationBarHidden:NO animated:YES];
-#endif
-  // Close center menu
-//  [self _closeCenterMenuView:nil];
-  shouldRecoverToNormalStatusWhenViewWillAppear_ = YES;
-}
-
-// Push View Controller
-- (void)pushViewController:(id)viewController {
-  [UIView animateWithDuration:.3f
-                        delay:0.f
-                      options:UIViewAnimationOptionCurveEaseInOut
-                   animations:^{
-                     // Slide away buttons in center view & hide them
-                     [self _updateButtonsLayoutWithTriangleHypotenuse:maxTriangleHypotenuse_];
-                     [self.menu setAlpha:0.f];
-                     
-                     /*/ Show Navigation Bar
-                     [self.navigationController setNavigationBarHidden:NO];
-                     CGRect navigationBarFrame = self.navigationController.navigationBar.frame;
-                     if (navigationBarFrame.origin.y < 0) {
-                       navigationBarFrame.origin.y = 0;
-                       [self.navigationController.navigationBar setFrame:navigationBarFrame];
-                     }*/
-                   }
-                   completion:^(BOOL finished) {
-                     [self.navigationController pushViewController:viewController animated:YES];
-                   }];
+- (void)addButtonWithImageName:(NSString *)imageName
+          highlightedImageName:(NSString *)highlightedImageName
+                      position:(KYCircleMenuPosition)position
+{
+    UIButton * button = [self _buttonAtPosition:position];
+    if (button) {
+        [self.buttons removeObject:button];
+        [button removeFromSuperview];
+    }
+    
+    // Add buttons to |ballMenu_|, set it's origin frame to center
+    button = [[UIButton alloc] initWithFrame:self.buttonOriginFrame];
+    [button setOpaque:NO];
+    [button setTag:position];
+    [button setImage:[UIImage imageNamed:imageName]
+            forState:UIControlStateNormal];
+    [button setImage:[UIImage imageNamed:highlightedImageName]
+            forState:UIControlStateHighlighted];
+    [button addTarget:self action:@selector(runButtonActions:) forControlEvents:UIControlEventTouchUpInside];
+    button.alpha = 0.0f;
+    [self addSubview:button];
+    [self.buttons addObject:button];
 }
 
 // Open center menu view
 - (void)open {
-  if (isOpening_)
+  if (self.isOpening)
     return;
-  isInProcessing_ = YES;
+  self.isInProcessing = YES;
   // Show buttons with animation
-  [UIView animateWithDuration:.3f
-                        delay:0.f
-                      options:UIViewAnimationCurveEaseInOut
-                   animations:^{
-                     [self.menu setAlpha:1.f];
-                     // Compute buttons' frame and set for them, based on |buttonCount|
-                     [self _updateButtonsLayoutWithTriangleHypotenuse:maxBounceOfTriangleHypotenuse_];
-                   }
-                   completion:^(BOOL finished) {
-                     [UIView animateWithDuration:.1f
-                                           delay:0.f
-                                         options:UIViewAnimationCurveEaseInOut
-                                      animations:^{
-                                        [self _updateButtonsLayoutWithTriangleHypotenuse:defaultTriangleHypotenuse_];
-                                      }
-                                      completion:^(BOOL finished) {
-                                        isOpening_ = YES;
-                                        isClosed_ = NO;
-                                        isInProcessing_ = NO;
-                                      }];
-                   }];
-}
-
-// Recover to normal status
-- (void)recoverToNormalStatus {
-  [self _updateButtonsLayoutWithTriangleHypotenuse:maxTriangleHypotenuse_];
   [UIView animateWithDuration:.3f
                         delay:0.f
                       options:UIViewAnimationOptionCurveEaseInOut
                    animations:^{
-                     // Show buttons & slide in to center
-                     [self.menu setAlpha:1.f];
-                     [self _updateButtonsLayoutWithTriangleHypotenuse:minBounceOfTriangleHypotenuse_];
+                       for (UIButton *button in self.buttons) {
+                           button.alpha = 1.0f;
+                       }
+                     // Compute buttons' frame and set for them, based on |buttonCount|
+                     [self _updateButtonsLayoutWithTriangleHypotenuse:self.maxBounceOfTriangleHypotenuse];
                    }
                    completion:^(BOOL finished) {
                      [UIView animateWithDuration:.1f
                                            delay:0.f
                                          options:UIViewAnimationOptionCurveEaseInOut
                                       animations:^{
-                                        [self _updateButtonsLayoutWithTriangleHypotenuse:defaultTriangleHypotenuse_];
+                                        [self _updateButtonsLayoutWithTriangleHypotenuse:self.defaultTriangleHypotenuse];
+                                      }
+                                      completion:^(BOOL finished) {
+                                          self.isOpening = YES;
+                                          self.isClosed = NO;
+                                          self.isInProcessing = NO;
+                                          
+                                          [self.menuOpenSignal sendNext:nil];
+                                      }];
+                   }];
+}
+
+// Recover to normal status
+- (void)recoverToNormalStatus {
+  [self _updateButtonsLayoutWithTriangleHypotenuse:self.maxTriangleHypotenuse];
+  [UIView animateWithDuration:.3f
+                        delay:0.f
+                      options:UIViewAnimationOptionCurveEaseInOut
+                   animations:^{
+                     // Show buttons & slide in to center
+                       for (UIButton *button in self.buttons) {
+                           button.alpha = 1.0f;
+                       }
+                     [self _updateButtonsLayoutWithTriangleHypotenuse:self.minBounceOfTriangleHypotenuse];
+                   }
+                   completion:^(BOOL finished) {
+                     [UIView animateWithDuration:.1f
+                                           delay:0.f
+                                         options:UIViewAnimationOptionCurveEaseInOut
+                                      animations:^{
+                                        [self _updateButtonsLayoutWithTriangleHypotenuse:self.defaultTriangleHypotenuse];
                                       }
                                       completion:nil];
                    }];
+}
+
+- (void)hideWithCompletionBlock:(void (^)())block
+{
+    [UIView animateWithDuration:.3f
+                          delay:0.f
+                        options:UIViewAnimationOptionCurveEaseInOut
+                     animations:^{
+                         // Slide away buttons in center view & hide them
+                         [self _updateButtonsLayoutWithTriangleHypotenuse:self.maxTriangleHypotenuse];
+                         for (UIButton *button in self.buttons) {
+                             button.alpha = 0.0f;
+                         }
+                         
+                         /*/ Show Navigation Bar
+                          [self.navigationController setNavigationBarHidden:NO];
+                          CGRect navigationBarFrame = self.navigationController.navigationBar.frame;
+                          if (navigationBarFrame.origin.y < 0) {
+                          navigationBarFrame.origin.y = 0;
+                          [self.navigationController.navigationBar setFrame:navigationBarFrame];
+                          }*/
+                     }
+                     completion:^(BOOL finished) {
+                         block();
+                     }];
 }
 
 #pragma mark - Private Methods
@@ -312,150 +283,149 @@ centerButtonBackgroundImageName:(NSString *)centerButtonBackgroundImageName {
                                              object:nil];
 }
 
+- (void)_handlePanGesture:(UIPanGestureRecognizer *)panGestureRecognizer
+{
+    CGPoint location = [panGestureRecognizer locationInView:self];
+    switch (panGestureRecognizer.state) {
+        case UIGestureRecognizerStateBegan:
+            self.centerButton.highlighted = YES;
+            [self open];
+            break;
+        case UIGestureRecognizerStateChanged:
+            for (UIButton *button in self.buttons) {
+                CGRect frame = button.frame;
+                if (CGRectContainsPoint(frame, location)) {
+                    if (![self.activeButton isEqual:button]) {
+                        if (self.activeButton != nil) {
+                            // left previous button and enter a new button
+                            self.activeButton.highlighted = NO;
+                        }
+                        
+                        button.highlighted = YES;
+                        self.activeButton = button;
+                    }
+                } else {
+                    if (self.activeButton == button) {
+                        button.highlighted = NO;
+                        self.activeButton = nil;
+                    }
+                }
+            }
+            break;
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            if (self.activeButton) {
+                [self _runButtonActions:self.activeButton];
+                
+                self.activeButton.highlighted = NO;
+                self.activeButton = nil;
+            }
+            self.centerButton.highlighted = NO;
+            [self.menuNeedToClosedSignal sendNext:nil];
+            break;
+        default:
+            break;
+    }
+}
+
 // Toggle Circle Menu
 - (void)_toggle:(id)sender {
-  (isClosed_ ? [self open] : [self _close:nil]);
+  (self.isClosed ? [self open] : [self _close:nil]);
 }
 
 // Close menu to hide all buttons around
 - (void)_close:(NSNotification *)notification {
-  if (isClosed_)
+  if (self.isClosed)
     return;
   
-  isInProcessing_ = YES;
+  self.isInProcessing = YES;
   // Hide buttons with animation
   [UIView animateWithDuration:.3f
                         delay:0.f
-                      options:UIViewAnimationCurveEaseIn
+                      options:UIViewAnimationOptionCurveEaseIn
                    animations:^{
-                     for (UIButton * button in [self.menu subviews])
-                       [button setFrame:buttonOriginFrame_];
-                     [self.menu setAlpha:0.f];
+                       for (UIButton * button in self.buttons) {
+                           [button setFrame:self.buttonOriginFrame];
+                           button.alpha = 0.0f;
+                       }
                    }
                    completion:^(BOOL finished) {
-                     isClosed_       = YES;
-                     isOpening_      = NO;
-                     isInProcessing_ = NO;
+                     self.isClosed       = YES;
+                     self.isOpening      = NO;
+                     self.isInProcessing = NO;
+                       
+                       
                    }];
 }
 
 // Update buttons' layout with the value of triangle hypotenuse that given
 - (void)_updateButtonsLayoutWithTriangleHypotenuse:(CGFloat)triangleHypotenuse {
-  //
-  //  Triangle Values for Buttons' Position
-  // 
-  //      /|      a: triangleA = c * cos(x)
-  //   c / | b    b: triangleB = c * sin(x)
-  //    /)x|      c: triangleHypotenuse
-  //   -----      x: degree
-  //     a
-  //
-  CGFloat centerBallMenuHalfSize = menuSize_         / 2.f;
-  CGFloat buttonRadius           = centerButtonSize_ / 2.f;
-  if (! triangleHypotenuse) triangleHypotenuse = defaultTriangleHypotenuse_; // Distance to Ball Center
-  
-  //
-  //      o       o   o      o   o     o   o     o o o     o o o
-  //     \|/       \|/        \|/       \|/       \|/       \|/
-  //  1 --|--   2 --|--    3 --|--   4 --|--   5 --|--   6 --|--
-  //     /|\       /|\        /|\       /|\       /|\       /|\
-  //                           o       o   o     o   o     o o o
-  //
-  switch (buttonCount_) {
-    case 1:
-      [self _setButtonWithTag:1 origin:CGPointMake(centerBallMenuHalfSize - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleHypotenuse - buttonRadius)];
-      break;
-      
-    case 2: {
-      CGFloat degree    = M_PI / 4.0f; // = 45 * M_PI / 180
-      CGFloat triangleB = triangleHypotenuse * sinf(degree);
-      CGFloat negativeValue = centerBallMenuHalfSize - triangleB - buttonRadius;
-      CGFloat positiveValue = centerBallMenuHalfSize + triangleB - buttonRadius;
-      [self _setButtonWithTag:1 origin:CGPointMake(negativeValue, negativeValue)];
-      [self _setButtonWithTag:2 origin:CGPointMake(positiveValue, negativeValue)];
-      break;
+    //
+    //  Triangle Values for Buttons' Position
+    // 
+    //      /|      a: triangleA = c * cos(x)
+    //   c / | b    b: triangleB = c * sin(x)
+    //    /)x|      c: triangleHypotenuse
+    //   -----      x: degree
+    //     a
+    //
+    CGFloat buttonRadius           = self.centerButtonSize / 2.f;
+    if (! triangleHypotenuse) triangleHypotenuse = self.defaultTriangleHypotenuse; // Distance to Ball Center
+
+    //
+    //      o       o   o      o   o     o   o     o o o     o o o
+    //     \|/       \|/        \|/       \|/       \|/       \|/
+    //  1 --|--   2 --|--    3 --|--   4 --|--   5 --|--   6 --|--
+    //     /|\       /|\        /|\       /|\       /|\       /|\
+    //                           o       o   o     o   o     o o o
+    //
+    CGFloat degree    = M_PI / 3.0f; // = 60 * M_PI / 180
+    CGFloat triangleA = triangleHypotenuse * cosf(degree);
+    CGFloat triangleB = triangleHypotenuse * sinf(degree);
+    [self _setButtonAtPosition:KYCircleMenuPositionTopLeft origin:CGPointMake(self.centerButtonCenterPosition.x - triangleB - buttonRadius,
+                                                 self.centerButtonCenterPosition.y - triangleA - buttonRadius)];
+    [self _setButtonAtPosition:KYCircleMenuPositionTopCenter origin:CGPointMake(self.centerButtonCenterPosition.x - buttonRadius,
+                                                 self.centerButtonCenterPosition.y - triangleHypotenuse - buttonRadius)];
+    [self _setButtonAtPosition:KYCircleMenuPositionTopRight origin:CGPointMake(self.centerButtonCenterPosition.x + triangleB - buttonRadius,
+                                                 self.centerButtonCenterPosition.y - triangleA - buttonRadius)];
+    [self _setButtonAtPosition:KYCircleMenuPositionBottomLeft origin:CGPointMake(self.centerButtonCenterPosition.x - triangleB - buttonRadius,
+                                                 self.centerButtonCenterPosition.y + triangleA - buttonRadius)];
+    [self _setButtonAtPosition:KYCircleMenuPositionBottomCenter origin:CGPointMake(self.centerButtonCenterPosition.x - buttonRadius,
+                                                 self.centerButtonCenterPosition.y + triangleHypotenuse - buttonRadius)];
+    [self _setButtonAtPosition:KYCircleMenuPositionBottomRight origin:CGPointMake(self.centerButtonCenterPosition.x + triangleB - buttonRadius,
+                                                 self.centerButtonCenterPosition.y + triangleA - buttonRadius)];
+}
+
+// Run action depend on button, it'll be implemented by subclass
+- (void)_runButtonActions:(id)sender {
+    UIButton *button = (UIButton *)sender;
+    if (button == nil) {
+        return;
     }
-      
-    case 3: {
-      // = 360.0f / self.buttonCount * M_PI / 180.0f;
-      // E.g: if |buttonCount_ = 6|, then |degree = 60.0f * M_PI / 180.0f|;
-      // CGFloat degree = 2 * M_PI / self.buttonCount;
-      //
-      CGFloat degree    = M_PI / 3.0f; // = 60 * M_PI / 180
-      CGFloat triangleA = triangleHypotenuse * cosf(degree);
-      CGFloat triangleB = triangleHypotenuse * sinf(degree);
-      [self _setButtonWithTag:1 origin:CGPointMake(centerBallMenuHalfSize - triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      [self _setButtonWithTag:2 origin:CGPointMake(centerBallMenuHalfSize + triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      [self _setButtonWithTag:3 origin:CGPointMake(centerBallMenuHalfSize - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleHypotenuse - buttonRadius)];
-      break;
+    KYCircleMenuPosition position = [self _positionOfButton:button];
+    if ([self.circleDelegate respondsToSelector:@selector(circleMenu:clickedButtonAtPosition:)]) {
+        [self.circleDelegate circleMenu:self clickedButtonAtPosition:position];
     }
-      
-    case 4: {
-      CGFloat degree    = M_PI / 4.0f; // = 45 * M_PI / 180
-      CGFloat triangleB = triangleHypotenuse * sinf(degree);
-      CGFloat negativeValue = centerBallMenuHalfSize - triangleB - buttonRadius;
-      CGFloat positiveValue = centerBallMenuHalfSize + triangleB - buttonRadius;
-      [self _setButtonWithTag:1 origin:CGPointMake(negativeValue, negativeValue)];
-      [self _setButtonWithTag:2 origin:CGPointMake(positiveValue, negativeValue)];
-      [self _setButtonWithTag:3 origin:CGPointMake(negativeValue, positiveValue)];
-      [self _setButtonWithTag:4 origin:CGPointMake(positiveValue, positiveValue)];
-      break;
-    }
-      
-    case 5: {
-      CGFloat degree    = M_PI / 2.5f; // = 72 * M_PI / 180
-      CGFloat triangleA = triangleHypotenuse * cosf(degree);
-      CGFloat triangleB = triangleHypotenuse * sinf(degree);
-      [self _setButtonWithTag:1 origin:CGPointMake(centerBallMenuHalfSize - triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      [self _setButtonWithTag:2 origin:CGPointMake(centerBallMenuHalfSize - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleHypotenuse - buttonRadius)];
-      [self _setButtonWithTag:3 origin:CGPointMake(centerBallMenuHalfSize + triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      
-      degree    = M_PI / 5.0f;  // = 36 * M_PI / 180
-      triangleA = triangleHypotenuse * cosf(degree);
-      triangleB = triangleHypotenuse * sinf(degree);
-      [self _setButtonWithTag:4 origin:CGPointMake(centerBallMenuHalfSize - triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleA - buttonRadius)];
-      [self _setButtonWithTag:5 origin:CGPointMake(centerBallMenuHalfSize + triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleA - buttonRadius)];
-      break;
-    }
-      
-    case 6: {
-      CGFloat degree    = M_PI / 3.0f; // = 60 * M_PI / 180
-      CGFloat triangleA = triangleHypotenuse * cosf(degree);
-      CGFloat triangleB = triangleHypotenuse * sinf(degree);
-      [self _setButtonWithTag:1 origin:CGPointMake(centerBallMenuHalfSize - triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      [self _setButtonWithTag:2 origin:CGPointMake(centerBallMenuHalfSize - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleHypotenuse - buttonRadius)];
-      [self _setButtonWithTag:3 origin:CGPointMake(centerBallMenuHalfSize + triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize - triangleA - buttonRadius)];
-      [self _setButtonWithTag:4 origin:CGPointMake(centerBallMenuHalfSize - triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleA - buttonRadius)];
-      [self _setButtonWithTag:5 origin:CGPointMake(centerBallMenuHalfSize - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleHypotenuse - buttonRadius)];
-      [self _setButtonWithTag:6 origin:CGPointMake(centerBallMenuHalfSize + triangleB - buttonRadius,
-                                                  centerBallMenuHalfSize + triangleA - buttonRadius)];
-      break;
-    }
-      
-    default:
-      break;
-  }
+    self.shouldRecoverToNormalStatusWhenViewWillAppear = YES;
 }
 
 // Set Frame for button with special tag
-- (void)_setButtonWithTag:(NSInteger)buttonTag origin:(CGPoint)origin {
-  UIButton * button = (UIButton *)[self.menu viewWithTag:buttonTag];
-  [button setFrame:CGRectMake(origin.x, origin.y, centerButtonSize_, centerButtonSize_)];
-  button = nil;
+- (void)_setButtonAtPosition:(KYCircleMenuPosition)position origin:(CGPoint)origin {
+    UIButton * button = [self _buttonAtPosition:position];
+    if (button) {
+        [button setFrame:CGRectMake(origin.x, origin.y, self.centerButtonSize, self.centerButtonSize)];
+    }
+}
+
+- (UIButton *)_buttonAtPosition:(KYCircleMenuPosition)position
+{
+    return (UIButton *)[self viewWithTag:position];
+}
+
+- (KYCircleMenuPosition)_positionOfButton:(UIButton *)button
+{
+    return (KYCircleMenuPosition)button.tag;
 }
 
 @end

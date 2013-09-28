@@ -12,30 +12,36 @@
 // If it is needed to be shown with the circle menu together,
 //   just copy this macro into your own config file & comment it out.
 //
-// #define KY_CIRCLEMENU_WITH_NAVIGATIONBAR 1
-
-// Constants
-#define kKYCircleMenuViewHeight CGRectGetHeight([UIScreen mainScreen].applicationFrame)
-#define kKYCircleMenuViewWidth  CGRectGetWidth([UIScreen mainScreen].applicationFrame)
-#define kKYCircleMenuNavigationBarHeight 44.f
 
 // Notification to close the menu
 #define kKYNCircleMenuClose @"KYNCircleMenuClose"
 
+typedef enum
+{
+    KYCircleMenuPositionTopLeft = 111,
+    KYCircleMenuPositionTopCenter,
+    KYCircleMenuPositionTopRight,
+    KYCircleMenuPositionBottomLeft,
+    KYCircleMenuPositionBottomCenter,
+    KYCircleMenuPositionBottomRight,
+} KYCircleMenuPosition;
 
-@interface KYCircleMenu : UIViewController {
-  UIView   * menu_;
-  UIButton * centerButton_;
-  BOOL       isOpening_;
-  BOOL       isInProcessing_;
-  BOOL       isClosed_;
-}
+@class KYCircleMenu;
 
-@property (nonatomic, retain) UIView   * menu;
-@property (nonatomic, retain) UIButton * centerButton;
-@property (nonatomic, assign) BOOL       isOpening;
-@property (nonatomic, assign) BOOL       isInProcessing;
-@property (nonatomic, assign) BOOL       isClosed;
+@protocol KYCircleMenuDelegate <NSObject>
+
+- (void)circleMenu:(KYCircleMenu *)circleMenu clickedButtonAtPosition:(KYCircleMenuPosition)position;
+- (void)circleMenuDidTapCenterButton:(KYCircleMenu *)circleMenu;
+
+@end
+
+@interface KYCircleMenu : UIView
+
+@property (nonatomic, assign) BOOL          isOpening;
+@property (nonatomic, assign) BOOL          isInProcessing;
+@property (nonatomic, assign) BOOL          isClosed;
+
+@property (nonatomic, weak) id<KYCircleMenuDelegate> circleDelegate;
 
 /*! Designated initializer for KYCircleMenu.
  *
@@ -49,29 +55,16 @@
  *
  * \returns An KYCircleMenu instance
  */
-- (id)      initWithButtonCount:(NSInteger)buttonCount
-                       menuSize:(CGFloat)menuSize
-                     buttonSize:(CGFloat)buttonSize
-          buttonImageNameFormat:(NSString *)buttonImageNameFormat
-               centerButtonSize:(CGFloat)centerButtonSize
-          centerButtonImageName:(NSString *)centerButtonImageName
-centerButtonBackgroundImageName:(NSString *)centerButtonBackgroundImageName;
+- (id)          initWithMenuSize:(CGFloat)menuSize
+                      buttonSize:(CGFloat)buttonSize
+                centerButtonSize:(CGFloat)centerButtonSize
+      centerButtonCenterPosition:(CGPoint)centerPosition
+           centerButtonImageName:(NSString *)centerButtonImageName
+centerButtonHighlightedImageName:(NSString *)centerButtonHighlightedImageName;
 
-/*! Run action for buttons around.
- *  Override this message to do custom jobs,
- *    but with |[super runButtonActions:sender];| at top.
- *
- * \param sender One of the button in circle menu
- */
-- (void)runButtonActions:(id)sender;
-
-/*! Custom push message to manage menu & the child views well.
- *  When press a button, dispatch this message to swipe away the menu buttons,
- *    and push the new view controller appropriately
- *
- * \param viewController The target view controller to be pushed
- */
-- (void)pushViewController:(id)viewController;
+- (void)addButtonWithImageName:(NSString *)imageName
+          highlightedImageName:(NSString *)highlightedImageName
+                      position:(KYCircleMenuPosition)position;
 
 /*! Open menu to show all buttons around
  */
@@ -80,5 +73,7 @@ centerButtonBackgroundImageName:(NSString *)centerButtonBackgroundImageName;
 /*! Recover all buttons to normal position
  */
 - (void)recoverToNormalStatus;
+
+- (void)hideWithCompletionBlock:(void (^)())block;
 
 @end
